@@ -26,7 +26,7 @@ class BayesLoc:
         self.colours = ["red", "green", "blue", "yellow", "line"]
         # self.hsv_ref = [colorsys.rgb_to_hsv(rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0) for rgb in self.colour_codes]
 
-        self.max_angular = 0.35 # rad/s
+        self.max_angular = 0.425 # rad/s
         self.colour_exit_max_angular = 0.15
         self.colour_exit_active_time = 1.5 # seconds
         self.last_state = "line"
@@ -131,7 +131,7 @@ class BayesLoc:
         twist.angular.z = k_p * error + k_i * integral - k_d * derivative
         print("BRUH:", twist.angular.z, max_angular)
         if twist.angular.z < 0 and twist.angular.z < -max_angular:
-            twist.angular.z = max_angular
+            twist.angular.z = -max_angular
         if twist.angular.z > 0 and twist.angular.z > max_angular:
             twist.angular.z = max_angular
 
