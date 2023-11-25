@@ -154,6 +154,8 @@ class BayesLoc:
 
         TODO: complete this function
         """
+        # u = 0, 1
+        return np.array([[0.0, 1, 0], [0.0, 0.0, 1.0]], dtype="float32")[u+1]
 
     def measurement_model(self, x):
         """
@@ -162,8 +164,24 @@ class BayesLoc:
         """
         if self.cur_colour is None:
             self.wait_for_colour()
+        
+        prob = np.zeros(len(self.colour_codes))
 
-        prob = np.zeros(len(colourCodes))
+        # meas_model = np.array([[0.60, 0.20, 0.05, 0.05, 0.1],
+        #                        [0.20, 0.60, 0.05, 0.05, 0.1],
+        #                        [0.025, 0.025, 0.65, 0.20, 0.1],
+        #                        [0.05, 0.05, 0.25, 0.60, 0.05],
+        #                        [0.05, 0.1, 0.025, 0.025, 0.8]])
+        meas_model = np.array([[0.60, 0.20, 0.05, 0.05],
+                               [0.20, 0.60, 0.05, 0.05],
+                               [0.025, 0.025, 0.65, 0.20],
+                               [0.05, 0.05, 0.25, 0.60],
+                               [0.05, 0.1, 0.025, 0.025]])
+        color = self.detect_line(x)
+
+        colour_to_idx = {"blue": 0, "green": 1, "yellow": 2, "red": 3, "line": 4}
+        # self.meas = meas_model[colour_to_idx[color]]
+        return meas_model[colour_to_idx[color]]
 
         """
         TODO: You need to compute the probability of states. You should return a 1x5 np.array
@@ -173,16 +191,38 @@ class BayesLoc:
 
         return prob
 
-    def state_predict(self):
+    def state_predict(self, u):
         rospy.loginfo("predicting state")
+        n = len(self.colour_map)
+        state_preds = np.zeros(n)
+        state_model = self.state_model(u) # TODO drive command
+        for j in range(n):
+            s = 0.0
+            for k in range(n):
+                if j - k == 1 or j == 0 and k == n-1:
+                    s += state_model[2] * self.probability[k]
+                elif k - j == 1 or k == 0 and j == n-1: # drive backwards
+                    s += state_model[0] * self.probability[k]
+                elif j == k:
+                    s += state_model[1] * self.probability[k]
+            state_preds[j] = s
+        return state_preds
         """
         TODO: Complete the state prediction function: update
         self.state_prediction with the predicted probability of being at each
         state (office)
         """
 
-    def state_update(self):
+    def state_update(self, x):
         rospy.loginfo("updating state")
+
+        n = len(self.colour_map)
+        state_upd = np.zeros(n)
+        meas = self.measurement_model(x) # TODO current measurement
+        state_pred = self.state_predict()
+        for j in range(n):
+            state_upd[j] = meas[self.colour_map[j]] * state_pred[j]
+        self.probability = state_upd / np.sum(state_upd)
         """
         TODO: Complete the state update function: update self.probabilities
         with the probability of being at each state
@@ -192,9 +232,12 @@ class BayesLoc:
 if __name__ == "__main__":
 
     # This is the known map of offices by colour
-    # 0: red, 1: green, 2: blue, 3: yellow, 4: line
+    # 0: red, 1: green, 2: blue, 3: yellow, 4: line <-- wrong numberings prolly
     # current map starting at cell #2 and ending at cell #12
-    colour_map = [3, 0, 1, 2, 2, 0, 1, 2, 3, 0, 1]
+    # colour_map = [3, 0, 1, 2, 2, 0, 1, 2, 3, 0, 1]
+    # blue, green, yellow, red, line
+    colour_map = [2, 3, 1, 0, 0, 3, 1, 0, 2, 3, 1]
+    offices = [4, 6, 10]
 
     # TODO calibrate these RGB values to recognize when you see a colour
     # NOTE: you may find it easier to compare colour readings using a different
@@ -223,12 +266,32 @@ if __name__ == "__main__":
 
     rospy.sleep(0.5)
     rate = rospy.Rate(10)
-
+    most_likely = 0
+    prev_x = "line"
+    cnt = 0
     while not rospy.is_shutdown():
         """
         TODO: complete this main loop by calling functions from BayesLoc, and
         adding your own high level and low level planning + control logic
         """
+        # wait for good consistent sensor reading
+        if most_likely in offices:
+            u = 0
+        else:
+            u = 1
+
+        x = localizer.detect_line(localizer.cur_colour)
+        if prev_x == x and x != "line":
+            cnt += 1
+        else:
+            cnt = 0
+        if cnt >= 5:
+            # if x is a colour for some cycles do loc
+            # localizer.state_model(u) # drive
+            # localizer.measurement_model(x) # reading
+            localizer.state_predict(u)
+            localizer.state_update(x)
+            most_likely = np.argmax(localizer.probability)
         rate.sleep()
 
     rospy.loginfo("finished!")
