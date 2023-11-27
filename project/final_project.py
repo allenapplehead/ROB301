@@ -276,7 +276,7 @@ if __name__ == "__main__":
         adding your own high level and low level planning + control logic
         """
         # wait for good consistent sensor reading
-        if most_likely in offices and np.max(localizer.probability) > 0.6: # also must be more than 60% sure that ur actually there, will prob need to make at least one loop around the map
+        if most_likely in offices and np.max(localizer.probability) > 0.45: # also must be more than 60% sure that ur actually there, will prob need to make at least one loop around the map
             u = 0
         else:
             u = 1
