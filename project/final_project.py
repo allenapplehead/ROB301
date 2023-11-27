@@ -155,6 +155,7 @@ class BayesLoc:
         TODO: complete this function
         """
         # u = 0, 1
+        # theres like no chance that if u say go forward it doesn't go forward
         return np.array([[0.0, 1, 0], [0.0, 0.0, 1.0]], dtype="float32")[u+1]
 
     def measurement_model(self, x):
@@ -177,11 +178,11 @@ class BayesLoc:
                                [0.025, 0.025, 0.65, 0.20],
                                [0.05, 0.05, 0.25, 0.60],
                                [0.05, 0.1, 0.025, 0.025]])
-        color = self.detect_line(x)
 
         colour_to_idx = {"blue": 0, "green": 1, "yellow": 2, "red": 3, "line": 4}
         # self.meas = meas_model[colour_to_idx[color]]
-        return meas_model[colour_to_idx[color]]
+        # x should be the detect line output from the main method
+        return meas_model[colour_to_idx[x]]
 
         """
         TODO: You need to compute the probability of states. You should return a 1x5 np.array
@@ -275,18 +276,19 @@ if __name__ == "__main__":
         adding your own high level and low level planning + control logic
         """
         # wait for good consistent sensor reading
-        if most_likely in offices:
+        if most_likely in offices and np.max(localizer.probability) > 0.6: # also must be more than 60% sure that ur actually there, will prob need to make at least one loop around the map
             u = 0
         else:
             u = 1
 
         x = localizer.detect_line(localizer.cur_colour)
-        if prev_x == x and x != "line":
+        if prev_x == x and x != "line": # track how many ticks of an actual colour read it's giving
             cnt += 1
         else:
             cnt = 0
-        if cnt >= 5:
-            # if x is a colour for some cycles do loc
+        if cnt >= 8:
+            # if x is a colour for some cycles (8 in this case) do loc
+            #could be lowered because the callback could tick many times before this counter can actually increment again
             # localizer.state_model(u) # drive
             # localizer.measurement_model(x) # reading
             localizer.state_predict(u)
