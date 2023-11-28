@@ -23,10 +23,13 @@ class BayesLoc:
         self.state_prediction = np.zeros(self.num_states)
         self.V = 0.06
 
+        self.motors_off = False
+        self.brakes = False
+
         self.colours = ["red", "green", "blue", "yellow", "line"]
         # self.hsv_ref = [colorsys.rgb_to_hsv(rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0) for rgb in self.colour_codes]
 
-        self.max_angular = 0.425 # rad/s
+        self.max_angular = 0.825 # rad/s
         self.colour_exit_max_angular = 0.15
         self.colour_exit_active_time = 1.5 # seconds
         self.last_state = "line"
@@ -88,20 +91,47 @@ class BayesLoc:
             self.last_state = detection
             t = Twist()
             t.linear.x = self.V + 0.03
-            self.cmd_pub.publish(t)
+            if self.brakes:
+                # twist = Twist()
+                # twist.linear.x = 0
+                # twist.angular.z = 0
+                # # localizer.cmd_pub.publish(twist)
+                # self.cmd_pub.publish(twist)
+
+                for i in range(48):
+                    t.linear.x = 0
+                    t.angular.z = 0.35
+                    self.cmd_pub.publish(t)
+                    self.rate.sleep()
+
+                for i in range(5):
+                    t.linear.x = 0
+                    t.angular.z = 0
+                    self.cmd_pub.publish(t)
+                    self.rate.sleep()
+
+                for i in range(41):
+                    t.linear.x = 0
+                    t.angular.z = -0.35
+                    self.cmd_pub.publish(t)
+                    self.rate.sleep()
+                self.brakes = False
+
+            if not self.motors_off:
+                self.cmd_pub.publish(t)
             self.rate.sleep()
             return
         else:
             # impose angular velocity constraints
             if self.last_state != "line":
-                print("IMPOSING ANG CONSTRAINT:", self.colour_exit_max_angular)
+                # print("IMPOSING ANG CONSTRAINT:", self.colour_exit_max_angular)
                 self.colour_exit_active = True
                 self.tic = time.time()
                 self.last_state = "line"
             if self.colour_exit_active and time.time() - self.tic > self.colour_exit_active_time:
                 print(time.time() - self.tic)
                 # turn off angular constraint
-                print("CANCEL ANG CONSTRAINT")
+                # print("CANCEL ANG CONSTRAINT")
                 self.colour_exit_active = False
 
         if self.colour_exit_active:
@@ -111,9 +141,9 @@ class BayesLoc:
         # if msg.data == -1:
         #     time.sleep(0.1)
         
-        k_p = 0.0075
+        k_p = 0.009
         k_i = 0.0
-        k_d = 0.0035
+        k_d = 0.004
 
         desired = 320
         integral = 0.0
@@ -129,14 +159,44 @@ class BayesLoc:
         twist = Twist()
         twist.linear.x = self.V
         twist.angular.z = k_p * error + k_i * integral - k_d * derivative
-        print("BRUH:", twist.angular.z, max_angular)
         if twist.angular.z < 0 and twist.angular.z < -max_angular:
             twist.angular.z = -max_angular
         if twist.angular.z > 0 and twist.angular.z > max_angular:
             twist.angular.z = max_angular
 
-        self.cmd_pub.publish(twist)
-        # rospy.loginfo(twist)
+        if self.brakes:
+            # twist = Twist()
+            # twist.linear.x = 0
+            # twist.angular.z = 0
+            # self.cmd_pub.publish(twist)
+
+            twist = Twist()
+
+            for i in range(48):
+                twist.linear.x = 0
+                twist.angular.z = 0.35
+                self.cmd_pub.publish(twist)
+                self.rate.sleep()
+
+            for i in range(5):
+                twist.linear.x = 0
+                twist.angular.z = 0
+                self.cmd_pub.publish(twist)
+                self.rate.sleep()
+
+            for i in range(41):
+                twist.linear.x = 0
+                twist.angular.z = -0.35
+                self.cmd_pub.publish(twist)
+                self.rate.sleep()
+            self.brakes = False
+
+
+
+        if not self.motors_off:
+            self.cmd_pub.publish(twist)
+
+        # print(twist)
         lasterror = error
         # self.rate.sleep()
 
@@ -156,7 +216,7 @@ class BayesLoc:
         """
         # u = 0, 1
         # theres like no chance that if u say go forward it doesn't go forward
-        return np.array([[0.0, 1, 0], [0.0, 0.0, 1.0]], dtype="float32")[u+1]
+        return np.array([[0.0, 1, 0], [0.0, 0.0, 1.0]], dtype="float32")[u]
 
     def measurement_model(self, x):
         """
@@ -193,7 +253,6 @@ class BayesLoc:
         return prob
 
     def state_predict(self, u):
-        rospy.loginfo("predicting state")
         n = len(self.colour_map)
         state_preds = np.zeros(n)
         state_model = self.state_model(u) # TODO drive command
@@ -214,13 +273,14 @@ class BayesLoc:
         state (office)
         """
 
-    def state_update(self, x):
-        rospy.loginfo("updating state")
+    def state_update(self, x, u):
+        print("updating state")
+        print(x)
 
         n = len(self.colour_map)
         state_upd = np.zeros(n)
         meas = self.measurement_model(x) # TODO current measurement
-        state_pred = self.state_predict()
+        state_pred = self.state_predict(u)
         for j in range(n):
             state_upd[j] = meas[self.colour_map[j]] * state_pred[j]
         self.probability = state_upd / np.sum(state_upd)
@@ -237,8 +297,12 @@ if __name__ == "__main__":
     # current map starting at cell #2 and ending at cell #12
     # colour_map = [3, 0, 1, 2, 2, 0, 1, 2, 3, 0, 1]
     # blue, green, yellow, red, line
-    colour_map = [2, 3, 1, 0, 0, 3, 1, 0, 2, 3, 1]
-    offices = [4, 6, 10]
+
+    #colour_to_idx = {"blue": 0, "green": 1, "yellow": 2, "red": 3, "line": 4}
+
+    colour_map = [2, 1, 0, 3, 3, 1, 0, 3, 2, 1, 0]
+    offices = [3, 6, 9]
+    visited_offices = set()
 
     # TODO calibrate these RGB values to recognize when you see a colour
     # NOTE: you may find it easier to compare colour readings using a different
@@ -276,25 +340,44 @@ if __name__ == "__main__":
         adding your own high level and low level planning + control logic
         """
         # wait for good consistent sensor reading
-        if most_likely in offices and np.max(localizer.probability) > 0.45: # also must be more than 60% sure that ur actually there, will prob need to make at least one loop around the map
+        if most_likely in offices and most_likely not in visited_offices and np.max(localizer.probability) > 0.45: # also must be more than 60% sure that ur actually there, will prob need to make at least one loop around the map
             u = 0
+            visited_offices.add(most_likely)
+            print("\n [ * ] Delivering MAIL to: \n", most_likely)
+            print(localizer.probability)
+            print(x)
+            localizer.brakes = True
         else:
             u = 1
 
         x = localizer.detect_line(localizer.cur_colour)
         if prev_x == x and x != "line": # track how many ticks of an actual colour read it's giving
             cnt += 1
-        else:
+        elif x == "line":
             cnt = 0
-        if cnt >= 8:
+        if cnt == 8 and not localizer.brakes:
             # if x is a colour for some cycles (8 in this case) do loc
             #could be lowered because the callback could tick many times before this counter can actually increment again
             # localizer.state_model(u) # drive
             # localizer.measurement_model(x) # reading
-            localizer.state_predict(u)
-            localizer.state_update(x)
-            most_likely = np.argmax(localizer.probability)
-        rate.sleep()
 
-    rospy.loginfo("finished!")
-    rospy.loginfo(localizer.probability)
+            if localizer.motors_off:
+                print("Cur measurement: ", x)
+                input()
+
+            
+            # localizer.state_predict(u)
+            localizer.state_update(x, u)
+            most_likely = np.argmax(localizer.probability)
+
+            # if localizer.motors_off:
+            #     print("Most likely state: ", most_likely)
+            #     input()
+
+            # cnt = 0
+
+        rate.sleep()
+        prev_x = x
+
+    print("finished!")
+    print(localizer.probability)
