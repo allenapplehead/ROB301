@@ -21,7 +21,7 @@ class BayesLoc:
         self.colour_map = colour_map
         self.probability = p0
         self.state_prediction = np.zeros(self.num_states)
-        self.V = 0.06
+        self.V = 0.04
 
         self.motors_off = False
         self.brakes = False
@@ -29,14 +29,15 @@ class BayesLoc:
         self.colours = ["red", "green", "blue", "yellow", "line"]
         # self.hsv_ref = [colorsys.rgb_to_hsv(rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0) for rgb in self.colour_codes]
 
-        self.max_angular = 0.825 # rad/s
+        self.max_angular = 0.625 # rad/s
         self.colour_exit_max_angular = 0.15
-        self.colour_exit_active_time = 1.5 # seconds
+        self.colour_exit_active_time = 0.75 # seconds
         self.last_state = "line"
         self.colour_exit_active = False
         self.tic = time.time()
 
         self.cur_colour = []  # most recent measured colour
+        self.colour_count = 0
         self.rate = rospy.Rate(10)
 
     def colour_callback(self, msg):
@@ -45,6 +46,9 @@ class BayesLoc:
         """
         self.cur_colour = np.array(msg.data)  # [r, g, b]
         # print(self.cur_colour)
+
+    def euclid(self, r, g, b, ref_rgb):
+        return math.sqrt(2*(r - ref_rgb[0])**2 + (g - ref_rgb[1])**2 + (b - ref_rgb[2])**2)
 
     def dist(self, rgb):
         # weighted euclidean distance
@@ -60,11 +64,34 @@ class BayesLoc:
         min_colour = "line"
 
         for i, ref_rgb in enumerate(self.colour_codes):
+
+            if abs(r - g) <= 15 and abs(g - b) <= 15 and abs(b - r) <= 15:
+                return "line"
             # cur_euclid = math.sqrt((h - hsv[0])**2 + (s - hsv[1])**2 + (v-hsv[2])**2)
-            cur_euclid = math.sqrt(1.5*(r - ref_rgb[0])**2 + 3*(g - ref_rgb[1])**2 + 2*(b - ref_rgb[2])**2)
+            # cur_euclid = math.sqrt(1.5*(r - ref_rgb[0])**2 + 3*(g - ref_rgb[1])**2 + 3*(b - ref_rgb[2])**2)
+
+            cur_euclid = math.sqrt(2*(r - ref_rgb[0])**2 + (g - ref_rgb[1])**2 + (b - ref_rgb[2])**2)
             if cur_euclid < min_euclid:
                 min_colour = self.colours[i]
                 min_euclid = cur_euclid
+
+        # find closest distance euclideanly
+        error_red = self.euclid(r, g, b, self.colour_codes[0])
+        error_green = self.euclid(r, g, b, self.colour_codes[1])
+        error_blue = self.euclid(r, g, b, self.colour_codes[2])
+        error_yellow = self.euclid(r, g, b, self.colour_codes[3])
+
+        error_min = min(error_red, error_green, error_blue, error_yellow)
+
+        if error_red == error_min:
+            return "red"
+        elif error_green == error_min:
+            return "green"
+        elif error_blue == error_min:
+            return "blue"
+        else:
+            return "yellow"
+
 
         #print("VERDICT:", min_colour)
         return min_colour
@@ -90,7 +117,7 @@ class BayesLoc:
         if detection != "line":
             self.last_state = detection
             t = Twist()
-            t.linear.x = self.V + 0.03
+            t.linear.x = self.V + 0.02
             if self.brakes:
                 # twist = Twist()
                 # twist.linear.x = 0
@@ -98,7 +125,7 @@ class BayesLoc:
                 # # localizer.cmd_pub.publish(twist)
                 # self.cmd_pub.publish(twist)
 
-                for i in range(48):
+                for i in range(47):
                     t.linear.x = 0
                     t.angular.z = 0.35
                     self.cmd_pub.publish(t)
@@ -110,11 +137,18 @@ class BayesLoc:
                     self.cmd_pub.publish(t)
                     self.rate.sleep()
 
-                for i in range(41):
+                for i in range(43):
                     t.linear.x = 0
                     t.angular.z = -0.35
                     self.cmd_pub.publish(t)
                     self.rate.sleep()
+
+                for i in range(20):
+                    t.linear.x = 0.03
+                    t.angular.z = 0.0
+                    self.cmd_pub.publish(t)
+                    self.rate.sleep()
+
                 self.brakes = False
 
             if not self.motors_off:
@@ -123,7 +157,11 @@ class BayesLoc:
             return
         else:
             # impose angular velocity constraints
-            if self.last_state != "line":
+            if self.last_state == detection and detection != "line":
+                self.colour_count += 1
+            else:
+                self.colour_count = 0
+            if self.last_state != "line" and self.colour_count == 5:
                 # print("IMPOSING ANG CONSTRAINT:", self.colour_exit_max_angular)
                 self.colour_exit_active = True
                 self.tic = time.time()
@@ -143,7 +181,7 @@ class BayesLoc:
         
         k_p = 0.009
         k_i = 0.0
-        k_d = 0.004
+        k_d = 0.0035
 
         desired = 320
         integral = 0.0
@@ -155,6 +193,7 @@ class BayesLoc:
         error = desired - actual
         integral += error
         derivative = error - lasterror
+
         # publish the twist message
         twist = Twist()
         twist.linear.x = self.V
@@ -172,7 +211,7 @@ class BayesLoc:
 
             twist = Twist()
 
-            for i in range(48):
+            for i in range(47):
                 twist.linear.x = 0
                 twist.angular.z = 0.35
                 self.cmd_pub.publish(twist)
@@ -184,11 +223,18 @@ class BayesLoc:
                 self.cmd_pub.publish(twist)
                 self.rate.sleep()
 
-            for i in range(41):
+            for i in range(43):
                 twist.linear.x = 0
                 twist.angular.z = -0.35
                 self.cmd_pub.publish(twist)
                 self.rate.sleep()
+
+            for i in range(20):
+                twist.linear.x = 0.03
+                twist.angular.z = 0.0
+                self.cmd_pub.publish(twist)
+                self.rate.sleep()
+
             self.brakes = False
 
 
@@ -301,7 +347,7 @@ if __name__ == "__main__":
     #colour_to_idx = {"blue": 0, "green": 1, "yellow": 2, "red": 3, "line": 4}
 
     colour_map = [2, 1, 0, 3, 3, 1, 0, 3, 2, 1, 0]
-    offices = [3, 6, 9]
+    offices = [3, 7, 10]
     visited_offices = set()
 
     # TODO calibrate these RGB values to recognize when you see a colour
@@ -316,12 +362,24 @@ if __name__ == "__main__":
     #     [167, 170, 117],  # yellow
     #     [150, 150, 150],  # line
     # ]
+
+    # colour_codes = [
+    #     [253.4693984375, 160.287484375, 116.329171875], # red
+    #     [161.250515625, 175.643015625, 166.354953125], # green
+    #     [185.0241640625, 169.0456015625, 191.5423203125], # blue
+    #     [190.01903125, 169.7723125, 157.4255625], # yellow
+    #     [150.980046875, 133.457421875, 140.574328125] # line
+    # ]
     colour_codes = [
-        [253.4693984375, 160.287484375, 116.329171875], # red
-        [161.250515625, 175.643015625, 166.354953125], # green
-        [185.0241640625, 169.0456015625, 191.5423203125], # blue
-        [190.01903125, 169.7723125, 157.4255625], # yellow
-        [150.980046875, 133.457421875, 140.574328125] # line
+        # [251.130015625, 140.62609375, 89.67190625], # red
+        [249.698890625, 160.8520078125, 102.7336953125],
+        # [143.2434921875, 170.0344921875, 154.7638359375], # green
+        [150.3832109375, 182.8780859375, 165.2038046875],
+        [170.988671875, 149.003234375, 178.843015625], # blue
+        # [182.1365234375, 159.4608671875, 147.0369296875], # yellow
+        [187.37475, 183.7438125, 162.80165625],
+        # [143.924296875, 128.9403046875, 135.141984375], # line
+        [127.543125, 127.004125, 128.9620625]
     ]
 
     # initial probability of being at a given office is uniform
@@ -340,7 +398,7 @@ if __name__ == "__main__":
         adding your own high level and low level planning + control logic
         """
         # wait for good consistent sensor reading
-        if most_likely in offices and most_likely not in visited_offices and np.max(localizer.probability) > 0.45: # also must be more than 60% sure that ur actually there, will prob need to make at least one loop around the map
+        if most_likely in offices and most_likely not in visited_offices and np.max(localizer.probability) > 0.55: # also must be more than 60% sure that ur actually there, will prob need to make at least one loop around the map
             u = 0
             visited_offices.add(most_likely)
             print("\n [ * ] Delivering MAIL to: \n", most_likely)
@@ -355,7 +413,7 @@ if __name__ == "__main__":
             cnt += 1
         elif x == "line":
             cnt = 0
-        if cnt == 8 and not localizer.brakes:
+        if cnt == 18 and not localizer.brakes:
             # if x is a colour for some cycles (8 in this case) do loc
             #could be lowered because the callback could tick many times before this counter can actually increment again
             # localizer.state_model(u) # drive
